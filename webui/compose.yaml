@@ -22,11 +22,6 @@ services:
 
         ENV PATH="/app/.venv/bin:$PATH"
 
-        # ── Layer 3: application code (invalidated on every source edit) ───────
-        # Rename to underscored form so gunicorn can import it as a Python module
-        # (hyphens are not valid in module names).
-        COPY sdcard-webui.py sdcard_webui.py
-
         EXPOSE 7777
 
         # gthread worker: each worker thread handles one request/stream.
@@ -43,4 +38,6 @@ services:
              "--timeout", "0", \
              "--access-logfile", "-", \
              "sdcard_webui:app"]
+    volumes:
+      - ./sdcard-webui.py:/app/sdcard_webui.py
     restart: unless-stopped
