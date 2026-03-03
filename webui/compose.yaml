@@ -43,6 +43,4 @@ services:
              "--timeout", "0", \
              "--access-logfile", "-", \
              "sdcard_webui:app"]
-    ports:
-      - "7777:7777"
     restart: unless-stopped
