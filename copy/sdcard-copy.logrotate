@@ -1,0 +1,10 @@
+# /etc/logrotate.d/sdcard-copy
+/var/log/sdcard-copy.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

@@ -1,0 +1,18 @@
+# /etc/udev/rules.d/99-sdcard-mount.rules
+#
+# Match SD/MMC and USB card reader block devices when added.
+# ENV{ID_BUS}=="?*" on the add rule guards against matching loop devices,
+# dm-* devices, and other virtual block devices that have no bus.
+# The remove rule omits this guard — on remove, udev can't probe the device
+# so ID_BUS is always empty.
+
+ACTION=="add", SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]p[0-9]|sd[b-z][0-9]", \
+    ENV{ID_BUS}=="?*", \
+    RUN+="/bin/systemd-run --system --no-block --collect \
+          --description='SD card mount %k' \
+          /usr/local/bin/sdcard-mount.sh mount %k"
+
+ACTION=="remove", SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]p[0-9]|sd[b-z][0-9]", \
+    RUN+="/bin/systemd-run --system --no-block --collect \
+          --description='SD card unmount %k' \
+          /usr/local/bin/sdcard-mount.sh unmount %k"

@@ -1,0 +1,218 @@
+# /etc/sdcard-copy/config.toml
+# ─────────────────────────────────────────────────────────────────────────────
+# SD card automatic copy configuration
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# FILE ROUTING
+# ────────────
+# Files are routed to camera configs in two stages:
+#
+#   1. EXIF (primary): exiftool reads Make/Model from every file in one batch
+#      call. The Make/Model string is matched against a built-in table to
+#      produce the camera type key (e.g. "Canon DSLR/Mirrorless").
+#
+#   2. Extension (fallback): files that carry no EXIF data (sidecar files,
+#      proxy videos, telemetry files) are matched by extension instead and
+#      grouped with the camera type that owns them (e.g. .LRV and .THM go
+#      to "GoPro").  This fallback also applies when exiftool is not installed.
+#
+#   The `extensions` key in each camera section is a SECONDARY filter applied
+#   on top of EXIF routing — it does not replace it.  Use it to restrict which
+#   file types you want to copy once a file has already been routed to that
+#   camera (e.g. copy RAW but not JPEG, or MP4 but not LRV proxies).
+#   Leave it empty to copy everything the camera produced.
+#
+# DESTINATION PLACEHOLDERS
+# ────────────────────────
+# Expanded at the moment a card is inserted (copy time, not shoot time).
+#
+#   {date}         2024-11-30
+#   {year}         2024
+#   {month}        11
+#   {day}          30
+#   {hour}         14
+#   {minute}       05
+#   {camera}       Canon_DSLR_Mirrorless   (config key, spaces/slashes → _)
+#   {exif_camera}  Canon_EOS_R5            (Make+Model from EXIF, most common
+#                                           among files being copied for this
+#                                           camera type)
+#   {card_uuid}    filesystem UUID (stable across readers and reboots)
+#   {card_label}   volume label, or "unlabeled"
+#
+# RESUMPTION
+# ──────────
+# Each card is identified by its filesystem UUID.  If removed mid-copy and
+# reinserted — even on a different day or reader — the script reads the saved
+# state and skips every file that was already fully hash-verified.
+#
+# Note on {date} and resumption: if {date} is in the destination template the
+# resumed copy will land in a folder named after the new day, not the original
+# copy day.  Use {card_uuid} or a static path if you want the resume to
+# continue into the same folder as the interrupted copy.
+#
+# INTEGRITY
+# ─────────
+# SHA-256 (or your chosen hash_algorithm) is computed chunk-by-chunk while
+# reading the source — no extra I/O.  After the atomic rename, the destination
+# is independently re-read and its hash compared to the source hash.
+# Chunk hashes are written to the log at DEBUG level; file hashes at INFO.
+# The final hash is stored in the state file and used on resume to detect
+# re-used cards with different content.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global settings
+# ─────────────────────────────────────────────────────────────────────────────
+
+state_dir      = "/var/lib/sdcard-copy"
+log_path       = "/var/log/sdcard-copy.log"
+verify_copy    = true
+copy_buffer_mb = 8
+
+# Hash algorithm for chunk logging and end-to-end file verification.
+# Any hashlib algorithm works: sha256, sha512, sha1, md5, blake2b, …
+hash_algorithm = "sha256"
+
+# Camera-level parallelism: how many camera types are copied simultaneously.
+# With two card readers and two camera types on a card, setting this to 2
+# keeps both readers saturated. Set to 1 to copy cameras sequentially.
+max_parallel_cameras = 2
+
+# File-level parallelism within each camera: how many files are copied
+# simultaneously. Useful when writing to a NAS over a fast network.
+# Set to 1 to copy files sequentially within each camera.
+max_parallel_files = 4
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Webhook notifications
+# ─────────────────────────────────────────────────────────────────────────────
+# All endpoints receive a POST with a JSON body.
+# Omit any key (or set to empty string) to disable that event.
+#
+# COMMON FIELDS in every payload:
+#   event        string  event name (same as the key below)
+#   timestamp    string  ISO-8601 datetime on the host machine
+#   card_uuid    string  filesystem UUID
+#   card_label   string  volume label or "unlabeled"
+#   device       string  e.g. "/dev/sdd1"
+#   mount_point  string  e.g. "/mnt/media/sdd1"
+#   kernel_dev   string  e.g. "sdd1"
+#
+# PER-EVENT EXTRA FIELDS:
+#
+#   card_inserted:
+#     cameras_detected  [string]  camera types found by detect-camera-content.sh
+#
+#   copy_started:
+#     camera       string  camera type being copied
+#     total_files  int
+#     total_bytes  int
+#
+#   copy_progress:
+#     camera       string
+#     files_done   int     files processed so far (copied + skipped)
+#     files_total  int
+#     bytes_done   int
+#     bytes_total  int
+#     percent      float   0.0–100.0
+#     eta_seconds  int|null
+#
+#   copy_finished:
+#     camera              string
+#     files_copied        int
+#     files_skipped       int
+#     bytes_total         int
+#     deleted_from_card   bool
+#
+#   copy_failed:
+#     camera   string  "*" if not camera-specific (e.g. card removed)
+#     reason   string
+#
+#   card_removed:
+#     copy_completed  bool
+
+[webhooks]
+card_inserted  = "http://homeassistant.local:8123/api/webhook/sdcard_inserted"
+copy_started   = "http://homeassistant.local:8123/api/webhook/sdcard_copy_started"
+copy_progress  = "http://homeassistant.local:8123/api/webhook/sdcard_copy_progress"
+copy_finished  = "http://homeassistant.local:8123/api/webhook/sdcard_copy_finished"
+copy_failed    = "http://homeassistant.local:8123/api/webhook/sdcard_copy_failed"
+card_removed   = "http://homeassistant.local:8123/api/webhook/sdcard_removed"
+
+progress_interval_seconds = 30
+timeout_seconds           = 5
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Camera configurations
+# ─────────────────────────────────────────────────────────────────────────────
+# The key must exactly match one of the camera type strings produced by
+# detect-camera-content.sh:
+#
+#   GoPro
+#   Canon DSLR/Mirrorless
+#   Nikon DSLR/Mirrorless
+#   Sony Camera
+#   Sony Cinema/Mirrorless (XAVC)
+#   Fujifilm Camera
+#   Olympus/OM System Camera
+#   Panasonic/Lumix Camera
+#   Panasonic/Lumix (AVCHD)
+#   DJI Drone
+#   Hasselblad Camera
+#   Phase One Camera
+#   Leica Camera
+#   Ricoh/Pentax Camera
+#   DNG Raw (Canon/Leica/Ricoh/GoPro/DJI)
+#   AVCHD Camcorder/Mirrorless
+
+# ── GoPro ────────────────────────────────────────────────────────────────────
+[cameras."GoPro"]
+# {exif_camera} will resolve to e.g. "GoPro_HERO12_Black"
+destination       = "/mnt/nas/footage/gopro/{year}/{month}/{day}/{exif_camera}"
+delete_after_copy = false
+# Empty extensions = copy everything: MP4 chapters, LRV proxies, THM
+# thumbnails, GPX telemetry. LRV and THM are matched by extension fallback
+# since they contain no EXIF.
+extensions = []
+
+# ── Canon ─────────────────────────────────────────────────────────────────────
+[cameras."Canon DSLR/Mirrorless"]
+# {exif_camera} will resolve to e.g. "Canon_EOS_R5"
+destination       = "/mnt/nas/photos/canon/{year}/{month}/{exif_camera}"
+delete_after_copy = true
+# Only copy RAW and JPEG; skip MOV video if processed separately.
+extensions = ["cr3", "cr2", "jpg", "jpeg"]
+
+# ── Nikon ─────────────────────────────────────────────────────────────────────
+[cameras."Nikon DSLR/Mirrorless"]
+destination       = "/mnt/nas/photos/nikon/{year}/{month}/{exif_camera}"
+delete_after_copy = true
+extensions        = ["nef", "nrw", "jpg", "jpeg"]
+
+# ── Sony stills ───────────────────────────────────────────────────────────────
+[cameras."Sony Camera"]
+destination       = "/mnt/nas/photos/sony/{year}/{month}"
+delete_after_copy = false
+extensions        = ["arw", "jpg", "jpeg"]
+
+# ── Sony Cinema / XAVC ────────────────────────────────────────────────────────
+[cameras."Sony Cinema/Mirrorless (XAVC)"]
+destination       = "/mnt/nas/footage/sony/{year}/{month}/{day}"
+delete_after_copy = false
+extensions        = []
+
+# ── Fujifilm ──────────────────────────────────────────────────────────────────
+[cameras."Fujifilm Camera"]
+destination       = "/mnt/nas/photos/fuji/{year}/{month}/{exif_camera}"
+delete_after_copy = true
+extensions        = ["raf", "jpg", "jpeg"]
+
+# ── DJI ───────────────────────────────────────────────────────────────────────
+[cameras."DJI Drone"]
+# {exif_camera} resolves to e.g. "DJI_Mavic_3_Pro"
+destination       = "/mnt/nas/footage/dji/{year}/{month}/{day}/{exif_camera}"
+delete_after_copy = false
+# Empty = copy MP4, DNG stills, SRT telemetry, and any other files DJI writes
+extensions        = []

@@ -1,0 +1,7 @@
+# /etc/tmpfiles.d/sdcard-copy.conf
+# Creates required directories on boot before the first card is inserted.
+# Apply immediately (without rebooting) with: systemd-tmpfiles --create
+
+d /etc/sdcard-copy          0755 root root -
+d /var/lib/sdcard-copy      0755 root root -
+d /var/log/camera-detection 0755 root root -

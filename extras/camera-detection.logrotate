@@ -1,0 +1,8 @@
+# /etc/logrotate.d/camera-detection
+/var/log/camera-detection/*.json {
+    monthly
+    rotate 12
+    missingok
+    notifempty
+    nocompress
+}

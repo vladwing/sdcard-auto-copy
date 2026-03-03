@@ -1,0 +1,48 @@
+services:
+  sdcard-webui:
+    build:
+      context: .
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.11}
+      dockerfile_inline: |
+        FROM ghcr.io/astral-sh/uv:alpine
+
+        ARG PYTHON_VERSION
+
+        WORKDIR /app
+
+        # ── Layer 1: Python interpreter (changes only when version arg changes) ─
+        RUN uv python install ${PYTHON_VERSION}
+
+        # ── Layer 2: virtualenv + dependencies (changes only when deps change) ─
+        RUN uv venv --python ${PYTHON_VERSION} /app/.venv && \
+            uv pip install --python /app/.venv \
+                "flask>=3.0" \
+                "gunicorn>=23.0"
+
+        ENV PATH="/app/.venv/bin:$PATH"
+
+        # ── Layer 3: application code (invalidated on every source edit) ───────
+        # Rename to underscored form so gunicorn can import it as a Python module
+        # (hyphens are not valid in module names).
+        COPY sdcard-webui.py sdcard_webui.py
+
+        EXPOSE 7777
+
+        # gthread worker: each worker thread handles one request/stream.
+        # --timeout 0 disables gunicorn's worker timeout so SSE connections
+        # are never killed for being idle.
+        # --threads 16: allows up to 16 concurrent SSE streams + webhook POSTs
+        # per worker without spawning multiple workers (shared in-process
+        # state — _active, _history, broker — must not be forked).
+        CMD ["gunicorn", \
+             "--bind", "0.0.0.0:7777", \
+             "--worker-class", "gthread", \
+             "--workers", "1", \
+             "--threads", "16", \
+             "--timeout", "0", \
+             "--access-logfile", "-", \
+             "sdcard_webui:app"]
+    ports:
+      - "7777:7777"
+    restart: unless-stopped
